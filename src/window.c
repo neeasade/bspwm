@@ -419,7 +419,7 @@ void draw_border(node_t *n, bool focused_node, bool focused_monitor)
 
 void window_draw_border(xcb_window_t win, uint32_t border_color_pxl)
 {
-	xcb_change_window_attributes(dpy, win, XCB_CW_BORDER_PIXEL, &border_color_pxl);
+	/* xcb_change_window_attributes(dpy, win, XCB_CW_BORDER_PIXEL, &border_color_pxl); */
 }
 
 void adopt_orphans(void)
