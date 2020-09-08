@@ -965,6 +965,8 @@ void cmd_query(char **args, int num, FILE *rsp)
 				num--, args++;
 				int ret;
 				coordinates_t tmp = ref;
+				ref.desktop = NULL;
+				ref.node = NULL;
 				if ((ret = monitor_from_desc(*args, &tmp, &ref)) != SELECTOR_OK) {
 					handle_failure(ret, "query -M", *args, rsp);
 					goto end;
@@ -976,6 +978,7 @@ void cmd_query(char **args, int num, FILE *rsp)
 				num--, args++;
 				int ret;
 				coordinates_t tmp = ref;
+				ref.node = NULL;
 				if ((ret = desktop_from_desc(*args, &tmp, &ref)) != SELECTOR_OK) {
 					handle_failure(ret, "query -D", *args, rsp);
 					goto end;
@@ -1092,12 +1095,18 @@ void cmd_query(char **args, int num, FILE *rsp)
 		goto end;
 	}
 
+	if ((dom == DOMAIN_MONITOR && (desktop_sel != NULL || node_sel != NULL)) ||
+	    (dom == DOMAIN_DESKTOP && node_sel != NULL)) {
+		fail(rsp, "query -%c: Incompatible descriptor-free constraints.\n", dom == DOMAIN_MONITOR ? 'M' : 'D');
+		goto end;
+	}
+
 	if (dom == DOMAIN_NODE) {
-		if (query_node_ids(&ref, &trg, node_sel, rsp) < 1) {
+		if (query_node_ids(&ref, &trg, monitor_sel, desktop_sel, node_sel, rsp) < 1) {
 			fail(rsp, "");
 		}
 	} else if (dom == DOMAIN_DESKTOP) {
-		if (query_desktop_ids(&ref, &trg, desktop_sel, print_ids ? fprint_desktop_id : fprint_desktop_name, rsp) < 1) {
+		if (query_desktop_ids(&ref, &trg, monitor_sel, desktop_sel, print_ids ? fprint_desktop_id : fprint_desktop_name, rsp) < 1) {
 			fail(rsp, "");
 		}
 	} else if (dom == DOMAIN_MONITOR) {
@@ -1138,8 +1147,10 @@ void cmd_rule(char **args, int num, FILE *rsp)
 			rule_t *rule = make_rule();
 			char *class_name = strtok(*args, COL_TOK);
 			char *instance_name = strtok(NULL, COL_TOK);
+			char *name = strtok(NULL, COL_TOK);
 			snprintf(rule->class_name, sizeof(rule->class_name), "%s", class_name);
 			snprintf(rule->instance_name, sizeof(rule->instance_name), "%s", instance_name==NULL?MATCH_ANY:instance_name);
+			snprintf(rule->name, sizeof(rule->name), "%s", name==NULL?MATCH_ANY:name);
 			num--, args++;
 			size_t i = 0;
 			while (num > 0) {

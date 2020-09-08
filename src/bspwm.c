@@ -51,11 +51,50 @@
 #include "query.h"
 #include "bspwm.h"
 
+xcb_connection_t *dpy;
+int default_screen, screen_width, screen_height;
+uint32_t clients_count;
+xcb_screen_t *screen;
+xcb_window_t root;
+char config_path[MAXLEN];
+
+monitor_t *mon;
+monitor_t *mon_head;
+monitor_t *mon_tail;
+monitor_t *pri_mon;
+history_t *history_head;
+history_t *history_tail;
+history_t *history_needle;
+rule_t *rule_head;
+rule_t *rule_tail;
+stacking_list_t *stack_head;
+stacking_list_t *stack_tail;
+subscriber_list_t *subscribe_head;
+subscriber_list_t *subscribe_tail;
+pending_rule_t *pending_rule_head;
+pending_rule_t *pending_rule_tail;
+
+xcb_window_t meta_window;
+motion_recorder_t motion_recorder;
+xcb_atom_t WM_STATE;
+xcb_atom_t WM_TAKE_FOCUS;
+xcb_atom_t WM_DELETE_WINDOW;
+int exit_status;
+
+bool auto_raise;
+bool sticky_still;
+bool hide_sticky;
+bool record_history;
+bool running;
+bool restart;
+bool randr;
+
 int main(int argc, char *argv[])
 {
 	fd_set descriptors;
 	char socket_path[MAXLEN];
 	char state_path[MAXLEN] = {0};
+	int run_level = 0;
 	config_path[0] = '\0';
 	int sock_fd = -1, cli_fd, dpy_fd, max_fd, n;
 	struct sockaddr_un sock_address;
@@ -78,9 +117,11 @@ int main(int argc, char *argv[])
 				snprintf(config_path, sizeof(config_path), "%s", optarg);
 				break;
 			case 's':
+				run_level |= 1;
 				snprintf(state_path, sizeof(state_path), "%s", optarg);
 				break;
 			case 'o':
+				run_level |= 2;
 				sock_fd = strtol(optarg, &end, 0);
 				if (*end != '\0') {
 					sock_fd = -1;
@@ -154,7 +195,7 @@ int main(int argc, char *argv[])
 	signal(SIGTERM, sig_handler);
 	signal(SIGCHLD, sig_handler);
 	signal(SIGPIPE, SIG_IGN);
-	run_config();
+	run_config(run_level);
 	running = true;
 
 	while (running) {
@@ -215,6 +256,8 @@ int main(int argc, char *argv[])
 		if (!check_connection(dpy)) {
 			running = false;
 		}
+
+		prune_dead_subscribers();
 	}
 
 	if (restart) {
@@ -481,5 +524,18 @@ void sig_handler(int sig)
 			;
 	} else if (sig == SIGINT || sig == SIGHUP || sig == SIGTERM) {
 		running = false;
+	}
+}
+
+/* Adapted from i3wm */
+uint32_t get_color_pixel(const char *color)
+{
+	unsigned int red, green, blue;
+	if (sscanf(color + 1, "%02x%02x%02x", &red, &green, &blue) == 3) {
+		/* We set the first 8 bits high to have 100% opacity in case of a 32 bit
+		 * color depth visual. */
+		return (0xFF << 24) | (red << 16 | green << 8 | blue);
+	} else {
+		return screen->black_pixel;
 	}
 }

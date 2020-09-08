@@ -431,6 +431,8 @@ node_t *insert_node(monitor_t *m, desktop_t *d, node_t *n, node_t *f)
 		}
 	}
 
+	m->sticky_count += sticky_count(n);
+
 	propagate_flags_upward(m, d, n);
 
 	if (d->focus == NULL && is_focusable(n)) {
@@ -607,9 +609,36 @@ bool focus_node(monitor_t *m, desktop_t *d, node_t *n)
 
 	draw_border(n, true, true);
 
-	focus_desktop(m, d);
+	bool desk_changed = (m != mon || m->desk != d);
+	bool has_input_focus = false;
+
+	if (mon != m) {
+		mon = m;
+
+		if (pointer_follows_monitor) {
+			center_pointer(m->rectangle);
+		}
+
+		put_status(SBSC_MASK_MONITOR_FOCUS, "monitor_focus 0x%08X\n", m->id);
+	}
+
+	if (m->desk != d) {
+		show_desktop(d);
+		set_input_focus(n);
+		has_input_focus = true;
+		hide_desktop(m->desk);
+		m->desk = d;
+	}
+
+	if (desk_changed) {
+		ewmh_update_current_desktop();
+		put_status(SBSC_MASK_DESKTOP_FOCUS, "desktop_focus 0x%08X 0x%08X\n", m->id, d->id);
+	}
 
 	d->focus = n;
+	if (!has_input_focus) {
+		set_input_focus(n);
+	}
 	ewmh_update_active_window();
 	history_add(m, d, n, true);
 
@@ -625,7 +654,6 @@ bool focus_node(monitor_t *m, desktop_t *d, node_t *n)
 	put_status(SBSC_MASK_NODE_FOCUS, "node_focus 0x%08X 0x%08X 0x%08X\n", m->id, d->id, n->id);
 
 	stack(d, n, true);
-	set_input_focus(n);
 
 	if (pointer_follows_focus) {
 		center_pointer(get_rectangle(m, d, n));
@@ -839,6 +867,48 @@ node_t *first_focusable_leaf(node_t *n)
 	return NULL;
 }
 
+node_t *next_node(node_t *n)
+{
+	if (n == NULL) {
+		return NULL;
+	}
+
+	if (n->second_child != NULL) {
+		return first_extrema(n->second_child);
+	} else {
+		node_t *p = n;
+		while (is_second_child(p)) {
+			p = p->parent;
+		}
+		if (is_first_child(p)) {
+			return p->parent;
+		} else {
+			return NULL;
+		}
+	}
+}
+
+node_t *prev_node(node_t *n)
+{
+	if (n == NULL) {
+		return NULL;
+	}
+
+	if (n->first_child != NULL) {
+		return second_extrema(n->first_child);
+	} else {
+		node_t *p = n;
+		while (is_first_child(p)) {
+			p = p->parent;
+		}
+		if (is_second_child(p)) {
+			return p->parent;
+		} else {
+			return NULL;
+		}
+	}
+}
+
 node_t *next_leaf(node_t *n, node_t *r)
 {
 	if (n == NULL) {
@@ -1016,6 +1086,10 @@ bool find_any_node_in(monitor_t *m, desktop_t *d, node_t *n, coordinates_t *ref,
 
 void find_first_ancestor(coordinates_t *ref, coordinates_t *dst, node_select_t *sel)
 {
+	if (ref->node == NULL) {
+		return;
+	}
+
 	coordinates_t loc = {ref->monitor, ref->desktop, ref->node};
 	while ((loc.node = loc.node->parent) != NULL) {
 		if (node_matches(&loc, ref, sel)) {
@@ -1091,7 +1165,7 @@ void find_by_area(area_peak_t ap, coordinates_t *ref, coordinates_t *dst, node_s
 		for (desktop_t *d = m->desk_head; d != NULL; d = d->next) {
 			for (node_t *f = first_extrema(d->root); f != NULL; f = next_leaf(f, d->root)) {
 				coordinates_t loc = {m, d, f};
-				if (f->client == NULL || f->vacant || !node_matches(&loc, ref, sel)) {
+				if (f->vacant || !node_matches(&loc, ref, sel)) {
 					continue;
 				}
 				unsigned int f_area = node_area(d, f);
@@ -1235,6 +1309,10 @@ void unlink_node(monitor_t *m, desktop_t *d, node_t *n)
 
 	node_t *p = n->parent;
 
+	if (m->sticky_count > 0) {
+		m->sticky_count -= sticky_count(n);
+	}
+
 	if (p == NULL) {
 		d->root = NULL;
 		d->focus = NULL;
@@ -1245,6 +1323,7 @@ void unlink_node(monitor_t *m, desktop_t *d, node_t *n)
 
 		history_remove(d, p, false);
 		cancel_presel(m, d, p);
+
 		if (p->sticky) {
 			m->sticky_count--;
 		}
@@ -1336,9 +1415,6 @@ void remove_node(monitor_t *m, desktop_t *d, node_t *n)
 	history_remove(d, n, true);
 	remove_stack_node(n);
 	cancel_presel_in(m, d, n);
-	if (m->sticky_count > 0) {
-		m->sticky_count -= sticky_count(n);
-	}
 	clients_count -= clients_count_in(n);
 	if (is_descendant(grabbed_node, n)) {
 		grabbed_node = NULL;
@@ -1493,14 +1569,22 @@ bool swap_nodes(monitor_t *m1, desktop_t *d1, node_t *n1, monitor_t *m2, desktop
 			draw_border(n1, is_descendant(n1, d2->focus), (m2 == mon));
 		}
 	} else {
-		draw_border(n1, is_descendant(n1, d2->focus), (m2 == mon));
-		draw_border(n2, is_descendant(n2, d1->focus), (m1 == mon));
+		if (!n1_held_focus) {
+			draw_border(n1, is_descendant(n1, d2->focus), (m2 == mon));
+		}
+		if (!n2_held_focus) {
+			draw_border(n2, is_descendant(n2, d1->focus), (m1 == mon));
+		}
 	}
 
 	arrange(m1, d1);
 
 	if (d1 != d2) {
 		arrange(m2, d2);
+	} else {
+		if (pointer_follows_focus && (n1_held_focus || n2_held_focus)) {
+			center_pointer(get_rectangle(m1, d1, d1->focus));
+		}
 	}
 
 	return true;
@@ -1610,7 +1694,7 @@ bool find_closest_node(coordinates_t *ref, coordinates_t *dst, cycle_dir_t dir, 
 	monitor_t *m = ref->monitor;
 	desktop_t *d = ref->desktop;
 	node_t *n = ref->node;
-	n = (dir == CYCLE_PREV ? prev_leaf(n, d->root) : next_leaf(n, d->root));
+	n = (dir == CYCLE_PREV ? prev_node(n) : next_node(n));
 
 #define HANDLE_BOUNDARIES(m, d, n)  \
 	while (n == NULL) { \
@@ -1631,11 +1715,11 @@ bool find_closest_node(coordinates_t *ref, coordinates_t *dst, cycle_dir_t dir, 
 
 	while (n != ref->node) {
 		coordinates_t loc = {m, d, n};
-		if (n->client != NULL && !n->hidden && node_matches(&loc, ref, sel)) {
+		if (node_matches(&loc, ref, sel)) {
 			*dst = loc;
 			return true;
 		}
-		n = (dir == CYCLE_PREV ? prev_leaf(n, d->root) : next_leaf(n, d->root));
+		n = (dir == CYCLE_PREV ? prev_node(n) : next_node(n));
 		HANDLE_BOUNDARIES(m, d, n);
 		if (ref->node == NULL && d == ref->desktop) {
 			break;
@@ -1826,7 +1910,9 @@ void set_floating(monitor_t *m, desktop_t *d, node_t *n, bool value)
 	}
 
 	cancel_presel(m, d, n);
-	set_vacant(m, d, n, value);
+	if (!n->hidden) {
+		set_vacant(m, d, n, value);
+	}
 
 	if (!value && d->focus == n) {
 		neutralize_occluding_windows(m, d, n);
@@ -1844,7 +1930,9 @@ void set_fullscreen(monitor_t *m, desktop_t *d, node_t *n, bool value)
 	client_t *c = n->client;
 
 	cancel_presel(m, d, n);
-	set_vacant(m, d, n, value);
+	if (!n->hidden) {
+		set_vacant(m, d, n, value);
+	}
 
 	if (value) {
 		c->wm_flags |= WM_FLAG_FULLSCREEN;

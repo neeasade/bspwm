@@ -36,24 +36,6 @@
 #include "subscribe.h"
 #include "settings.h"
 
-void focus_desktop(monitor_t *m, desktop_t *d)
-{
-	bool changed = (m != mon || m->desk != d);
-
-	focus_monitor(m);
-
-	if (m->desk != d) {
-		show_desktop(d);
-		hide_desktop(m->desk);
-		m->desk = d;
-	}
-
-	if (changed) {
-		ewmh_update_current_desktop();
-		put_status(SBSC_MASK_DESKTOP_FOCUS, "desktop_focus 0x%08X 0x%08X\n", m->id, d->id);
-	}
-}
-
 bool activate_desktop(monitor_t *m, desktop_t *d)
 {
 	if (d != NULL && m == mon) {
@@ -301,6 +283,7 @@ void add_desktop(monitor_t *m, desktop_t *d)
 	d->border_width = m->border_width;
 	d->window_gap = m->window_gap;
 	insert_desktop(m, d);
+	ewmh_update_current_desktop();
 	ewmh_update_number_of_desktops();
 	ewmh_update_desktop_names();
 	ewmh_update_desktop_viewport();

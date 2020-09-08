@@ -81,7 +81,9 @@ bool manage_window(xcb_window_t win, rule_consequence_t *csq, int fd)
 
 	if (!ignore_ewmh_struts && ewmh_handle_struts(win)) {
 		for (monitor_t *m = mon_head; m != NULL; m = m->next) {
-			arrange(m, m->desk);
+			for (desktop_t *d = m->desk_head; d != NULL; d = d->next) {
+				arrange(m, d);
+			}
 		}
 	}
 
@@ -124,11 +126,8 @@ bool manage_window(xcb_window_t win, rule_consequence_t *csq, int fd)
 		f = mon->desk->focus;
 	}
 
-	if (csq->split_dir[0] != '\0' && f != NULL) {
-		direction_t dir;
-		if (parse_direction(csq->split_dir, &dir)) {
-			presel_dir(m, d, f, dir);
-		}
+	if (csq->split_dir != NULL && f != NULL) {
+		presel_dir(m, d, f, *csq->split_dir);
 	}
 
 	if (csq->split_ratio != 0 && f != NULL) {
@@ -733,18 +732,32 @@ void query_pointer(xcb_window_t *win, xcb_point_t *pt)
 
 	if (qpr != NULL) {
 		if (win != NULL) {
-			*win = qpr->child;
-			xcb_point_t pt = {qpr->root_x, qpr->root_y};
-			for (stacking_list_t *s = stack_tail; s != NULL; s = s->prev) {
-				if (!s->node->client->shown || s->node->hidden) {
-					continue;
-				}
-				xcb_rectangle_t rect = get_rectangle(NULL, NULL, s->node);
-				if (is_inside(pt, rect)) {
-					if (s->node->id == qpr->child || is_presel_window(qpr->child)) {
-						*win = s->node->id;
+			if (qpr->child == XCB_NONE) {
+				xcb_point_t mpt = (xcb_point_t) {qpr->root_x, qpr->root_y};
+				monitor_t *m = monitor_from_point(mpt);
+				if (m != NULL) {
+					desktop_t *d = m->desk;
+					for (node_t *n = first_extrema(d->root); n != NULL; n = next_leaf(n, d->root)) {
+						if (n->client == NULL && is_inside(mpt, get_rectangle(m, d, n))) {
+							*win = n->id;
+							break;
+						}
 					}
-					break;
+				}
+			} else {
+				*win = qpr->child;
+				xcb_point_t pt = {qpr->root_x, qpr->root_y};
+				for (stacking_list_t *s = stack_tail; s != NULL; s = s->prev) {
+					if (!s->node->client->shown || s->node->hidden) {
+						continue;
+					}
+					xcb_rectangle_t rect = get_rectangle(NULL, NULL, s->node);
+					if (is_inside(pt, rect)) {
+						if (s->node->id == qpr->child || is_presel_window(qpr->child)) {
+							*win = s->node->id;
+						}
+						break;
+					}
 				}
 			}
 		}
